@@ -606,6 +606,7 @@ let state = {
   filterYear:new Date().getFullYear(),
   filterQuarter:'ALL',
   offeringPct:0.10,
+  savingsPct:0.20,
   isAdmin:false
 };
 
@@ -733,6 +734,7 @@ function renderDashboard(lowStock){
   const totalExpenses = exps.reduce((s,e)=>s+Number(e.amount),0);
   const netProfit = grossProfit-totalExpenses;
   const offering = Math.max(0,netProfit) * Number(state.offeringPct);
+  const savings = Math.max(0,netProfit) * Number(state.savingsPct);
 
   const quarters=[1,2,3,4];
   const qData = quarters.map(qq=>{
@@ -781,8 +783,15 @@ function renderDashboard(lowStock){
         </div>
         <div class="card-value money" style="color:var(--gold-dark)">${peso(offering)}</div>
       </div>
+      <div class="card" style="border-color:#3E6B8A">
+        <div class="card-label">Savings
+          <input type="number" min="0" max="100" step="1" value="${(state.savingsPct*100).toFixed(0)}" data-action="savings-pct"
+            style="width:44px; padding:1px 4px; font-size:11px; margin-left:4px;">%
+        </div>
+        <div class="card-value money" style="color:#3E6B8A">${peso(savings)}</div>
+      </div>
     </div>
-    <div class="section-note" style="margin-top:-14px; margin-bottom:24px;">Offering is computed as <strong>${(state.offeringPct*100).toFixed(0)}% of Net Profit</strong> — actual income only, after all cost of goods and expenses are deducted. Edit the % above anytime.</div>
+    <div class="section-note" style="margin-top:-14px; margin-bottom:24px;">Offering is computed as <strong>${(state.offeringPct*100).toFixed(0)}% of Net Profit</strong>, and Savings as <strong>${(state.savingsPct*100).toFixed(0)}% of Net Profit</strong> — actual income only, after all cost of goods and expenses are deducted. Edit either % anytime.</div>
 
     <div class="chart">
       <div class="chart-title">Sales vs. Expenses by Quarter — ${y}</div>
@@ -1329,9 +1338,19 @@ async function handleAction(action, el){
       if(isNaN(pct)) pct = 10;
       pct = Math.min(100, Math.max(0, pct));
       state.offeringPct = pct/100;
-      saveKey('settings', {offeringPct: state.offeringPct});
+      saveKey('settings', {offeringPct: state.offeringPct, savingsPct: state.savingsPct});
       render();
       setTimeout(()=>{ const f=document.querySelector('[data-action="offering-pct"]'); if(f){ f.focus(); } },0);
+      break;
+    }
+    case 'savings-pct': {
+      let pct = Number(el.value);
+      if(isNaN(pct)) pct = 20;
+      pct = Math.min(100, Math.max(0, pct));
+      state.savingsPct = pct/100;
+      saveKey('settings', {offeringPct: state.offeringPct, savingsPct: state.savingsPct});
+      render();
+      setTimeout(()=>{ const f=document.querySelector('[data-action="savings-pct"]'); if(f){ f.focus(); } },0);
       break;
     }
     case 'exempt-input': {
@@ -1479,7 +1498,7 @@ document.addEventListener('click', (e)=>{
 document.addEventListener('change', (e)=>{
   const el = e.target.closest('[data-action]');
   if(!el) return;
-  const liveActions = ['filter-year','filter-quarter','tax-rate','exempt-input','order-product-change','offering-pct'];
+  const liveActions = ['filter-year','filter-quarter','tax-rate','exempt-input','order-product-change','offering-pct','savings-pct'];
   if(liveActions.includes(el.getAttribute('data-action'))){
     handleAction(el.getAttribute('data-action'), el);
   }
@@ -1493,7 +1512,7 @@ async function loadUserData(){
     loadKey('expenses', []),
     loadKey('adjustments', []),
     loadKey('tax-settings', {rate:0.03, exempt:{}, vat8:false}),
-    loadKey('settings', {offeringPct:0.10})
+    loadKey('settings', {offeringPct:0.10, savingsPct:0.20})
   ]);
   state.products = products;
   state.orders = orders;
@@ -1501,6 +1520,7 @@ async function loadUserData(){
   state.adjustments = adjustments;
   state.tax = tax;
   state.offeringPct = (settings && typeof settings.offeringPct==='number') ? settings.offeringPct : 0.10;
+  state.savingsPct = (settings && typeof settings.savingsPct==='number') ? settings.savingsPct : 0.20;
   state.ready = true;
   render();
 }
