@@ -607,6 +607,8 @@ let state = {
   filterQuarter:'ALL',
   offeringPct:0.10,
   savingsPct:0.20,
+  offeringClearedAt:0,
+  offeringHistory:[],
   isAdmin:false
 };
 
@@ -655,6 +657,18 @@ function expensesInScope(year,q){
     const qq=quarterOf(e.date);
     return qq.year===year && (q==='ALL' || qq.q===q);
   });
+}
+
+// Net profit computed from ALL records dated after a checkpoint timestamp —
+// independent of the dashboard's year/quarter filter. Used for Offering/Savings
+// so they keep accumulating correctly regardless of which period you're viewing.
+function netProfitSince(timestampMs){
+  const ordersSince = state.orders.filter(o=> new Date(o.date+'T00:00:00').getTime() > timestampMs);
+  const expensesSince = state.expenses.filter(e=> new Date(e.date+'T00:00:00').getTime() > timestampMs);
+  const sales = ordersSince.reduce((s,o)=>s+Number(o.qty)*Number(o.unitPrice),0);
+  const cost = ordersSince.reduce((s,o)=>s+Number(o.qty)*Number(o.unitCost),0);
+  const exp = expensesSince.reduce((s,e)=>s+Number(e.amount),0);
+  return sales - cost - exp;
 }
 
 /* ---------------- Render root ---------------- */
@@ -733,7 +747,8 @@ function renderDashboard(lowStock){
   const grossProfit = totalSales-totalCost;
   const totalExpenses = exps.reduce((s,e)=>s+Number(e.amount),0);
   const netProfit = grossProfit-totalExpenses;
-  const offering = Math.max(0,netProfit) * Number(state.offeringPct);
+  const netProfitSinceOfferingClear = Math.max(0, netProfitSince(state.offeringClearedAt||0));
+  const offering = netProfitSinceOfferingClear * Number(state.offeringPct);
   const savings = Math.max(0,netProfit) * Number(state.savingsPct);
 
   const quarters=[1,2,3,4];
@@ -782,6 +797,8 @@ function renderDashboard(lowStock){
             style="width:44px; padding:1px 4px; font-size:11px; margin-left:4px;">%
         </div>
         <div class="card-value money" style="color:var(--gold-dark)">${peso(offering)}</div>
+        ${offering>0?`<button class="btn small" style="margin-top:8px;background:var(--gold);border-color:var(--gold);color:#16241F;" data-action="clear-offering">✓ Mark as Given</button>`
+          :`<div class="hint" style="margin-top:8px;">Nothing pending right now.</div>`}
       </div>
       <div class="card" style="border-color:#3E6B8A">
         <div class="card-label">Savings
@@ -791,7 +808,18 @@ function renderDashboard(lowStock){
         <div class="card-value money" style="color:#3E6B8A">${peso(savings)}</div>
       </div>
     </div>
-    <div class="section-note" style="margin-top:-14px; margin-bottom:24px;">Offering is computed as <strong>${(state.offeringPct*100).toFixed(0)}% of Net Profit</strong>, and Savings as <strong>${(state.savingsPct*100).toFixed(0)}% of Net Profit</strong> — actual income only, after all cost of goods and expenses are deducted. Edit either % anytime.</div>
+    <div class="section-note" style="margin-top:-14px; margin-bottom:24px;">Offering is computed as <strong>${(state.offeringPct*100).toFixed(0)}% of Net Profit</strong>, and Savings as <strong>${(state.savingsPct*100).toFixed(0)}% of Net Profit</strong> — actual income only, after all cost of goods and expenses are deducted. Offering resets to zero once you mark it as given, and only starts building up again from sales/expenses after that point. Edit either % anytime.</div>
+    ${state.offeringHistory && state.offeringHistory.length>0 ? `
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Date Given</th><th style="text-align:right">Amount</th></tr></thead>
+        <tbody>
+          ${[...state.offeringHistory].sort((a,b)=>b.clearedAt-a.clearedAt).slice(0,5).map(h=>`
+            <tr><td>${new Date(h.clearedAt).toISOString().slice(0,10)}</td><td class="num">${peso(h.amount)}</td></tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>` : ''}
 
     <div class="chart">
       <div class="chart-title">Sales vs. Expenses by Quarter — ${y}</div>
@@ -1338,7 +1366,7 @@ async function handleAction(action, el){
       if(isNaN(pct)) pct = 10;
       pct = Math.min(100, Math.max(0, pct));
       state.offeringPct = pct/100;
-      saveKey('settings', {offeringPct: state.offeringPct, savingsPct: state.savingsPct});
+      saveSettings();
       render();
       setTimeout(()=>{ const f=document.querySelector('[data-action="offering-pct"]'); if(f){ f.focus(); } },0);
       break;
@@ -1348,9 +1376,20 @@ async function handleAction(action, el){
       if(isNaN(pct)) pct = 20;
       pct = Math.min(100, Math.max(0, pct));
       state.savingsPct = pct/100;
-      saveKey('settings', {offeringPct: state.offeringPct, savingsPct: state.savingsPct});
+      saveSettings();
       render();
       setTimeout(()=>{ const f=document.querySelector('[data-action="savings-pct"]'); if(f){ f.focus(); } },0);
+      break;
+    }
+    case 'clear-offering': {
+      const pendingAmount = Math.max(0, netProfitSince(state.offeringClearedAt||0)) * Number(state.offeringPct);
+      if(confirm(`Mark ${peso(pendingAmount)} as given? This will reset the Offering counter to zero — your sales and expense records stay untouched. Offering will only start building up again from new activity after today.`)){
+        state.offeringHistory = state.offeringHistory || [];
+        state.offeringHistory.push({ clearedAt: Date.now(), amount: pendingAmount });
+        state.offeringClearedAt = Date.now();
+        saveSettings();
+        render();
+      }
       break;
     }
     case 'exempt-input': {
@@ -1505,6 +1544,15 @@ document.addEventListener('change', (e)=>{
 });
 
 /* ---------------- Init ---------------- */
+function saveSettings(){
+  saveKey('settings', {
+    offeringPct: state.offeringPct,
+    savingsPct: state.savingsPct,
+    offeringClearedAt: state.offeringClearedAt,
+    offeringHistory: state.offeringHistory
+  });
+}
+
 async function loadUserData(){
   const [products, orders, expenses, adjustments, tax, settings] = await Promise.all([
     loadKey('products', []),
@@ -1512,7 +1560,7 @@ async function loadUserData(){
     loadKey('expenses', []),
     loadKey('adjustments', []),
     loadKey('tax-settings', {rate:0.03, exempt:{}, vat8:false}),
-    loadKey('settings', {offeringPct:0.10, savingsPct:0.20})
+    loadKey('settings', {offeringPct:0.10, savingsPct:0.20, offeringClearedAt:0, offeringHistory:[]})
   ]);
   state.products = products;
   state.orders = orders;
@@ -1521,6 +1569,8 @@ async function loadUserData(){
   state.tax = tax;
   state.offeringPct = (settings && typeof settings.offeringPct==='number') ? settings.offeringPct : 0.10;
   state.savingsPct = (settings && typeof settings.savingsPct==='number') ? settings.savingsPct : 0.20;
+  state.offeringClearedAt = (settings && typeof settings.offeringClearedAt==='number') ? settings.offeringClearedAt : 0;
+  state.offeringHistory = (settings && Array.isArray(settings.offeringHistory)) ? settings.offeringHistory : [];
   state.ready = true;
   render();
 }
